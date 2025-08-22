@@ -2,14 +2,27 @@ package main
 
 import (
 	"fmt"
-	"net/http"
-	"io"
-	"time"
-	"encoding/base64"
-
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
+	"io"
+	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
 )
+
+func getImageExtension(s string) (string, error) {
+	items := strings.Split(s, "/")
+	if len(items) < 2 || len(items) > 2 {
+		return "", fmt.Errorf("not a valid image mime-type")
+	}
+	kind, extension := items[0], items[1]
+	if kind == "image" {
+		return extension, nil
+	}
+	return "", fmt.Errorf("not an image")
+}
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
 	videoIDString := r.PathValue("videoID")
@@ -62,6 +75,13 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 	}
 	defer file.Close()
 	contentType := header.Header.Get("Content-Type") // just assume that even an empty mime-type is valid
+	extension, err := getImageExtension(contentType)
+
+	if err != nil {
+		respondWithError(w, http.StatusNotAcceptable, "Not acceptable", err)
+		return
+
+	}
 
 	data, err := io.ReadAll(file)
 
@@ -70,9 +90,28 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	base64EncodedString := base64.StdEncoding.EncodeToString(data)
+	insideAssetsPath := fmt.Sprintf("%s.%s", video.ID.String(), extension)
+	savePath := filepath.Join(cfg.assetsRoot, insideAssetsPath)
+	thumbnailFile, err := os.Create(savePath)
 
-	thumbnailUrl := fmt.Sprintf("data:%s;base64,%s", contentType, base64EncodedString)
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Server error", err)
+		return
+	}
+	defer thumbnailFile.Close()
+
+	if _, err = thumbnailFile.Write(data); err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Server error", err)
+		return
+	}
+
+	scheme := "http"
+
+	if r.TLS != nil {
+		scheme = "https"
+	}
+
+	thumbnailUrl := fmt.Sprintf("%s://%s/assets/%s.%s", scheme, r.Host, video.ID.String(), extension)
 	video.UpdatedAt = time.Now()
 	video.ThumbnailURL = &thumbnailUrl
 
