@@ -5,6 +5,7 @@ import (
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 	"io"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,7 +14,11 @@ import (
 )
 
 func getImageExtension(s string) (string, error) {
-	items := strings.Split(s, "/")
+	mediaType, _, err := mime.ParseMediaType(s)
+	if err != nil {
+		return "", err
+	}
+	items := strings.Split(mediaType, "/")
 	if len(items) < 2 || len(items) > 2 {
 		return "", fmt.Errorf("not a valid image mime-type")
 	}
