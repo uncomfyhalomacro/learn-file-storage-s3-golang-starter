@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 
+	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/database"
 	"github.com/google/uuid"
 
@@ -18,6 +21,7 @@ type apiConfig struct {
 	platform         string
 	filepathRoot     string
 	assetsRoot       string
+	s3Client         *s3.Client
 	s3Bucket         string
 	s3Region         string
 	s3CfDistribution string
@@ -84,12 +88,30 @@ func main() {
 		log.Fatal("PORT environment variable is not set")
 	}
 
+	s3Config, err := config.LoadDefaultConfig(context.Background(), config.WithRegion(s3Region))
+
+	if err != nil {
+		log.Fatalf("unable to load AWS config: %v", err)
+	}
+
+	s3Client := s3.NewFromConfig(s3Config)
+
+	// Make sure we have access to the bucket
+	_, err = s3Client.HeadBucket(context.Background(), &s3.HeadBucketInput{
+		Bucket: &s3Bucket,
+	})
+
+	if err != nil {
+		log.Fatalf("unable to access S3 bucket %q, %v", s3Bucket, err)
+	}
+
 	cfg := apiConfig{
 		db:               db,
 		jwtSecret:        jwtSecret,
 		platform:         platform,
 		filepathRoot:     filepathRoot,
 		assetsRoot:       assetsRoot,
+		s3Client:         s3Client,
 		s3Bucket:         s3Bucket,
 		s3Region:         s3Region,
 		s3CfDistribution: s3CfDistribution,
