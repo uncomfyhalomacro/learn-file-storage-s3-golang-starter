@@ -2,8 +2,6 @@ package main
 
 import (
 	"fmt"
-	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
-	"github.com/google/uuid"
 	"io"
 	"mime"
 	"net/http"
@@ -11,6 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
+	"github.com/google/uuid"
 )
 
 func getImageExtension(s string) (string, error) {
@@ -95,8 +96,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	insideAssetsPath := fmt.Sprintf("%s.%s", video.ID.String(), extension)
-	savePath := filepath.Join(cfg.assetsRoot, insideAssetsPath)
+	thumbnailFilename := fmt.Sprintf("%s.%s", video.ID.String(), extension)
+	savePath := filepath.Join(cfg.assetsRoot, thumbnailFilename)
 	thumbnailFile, err := os.Create(savePath)
 
 	if err != nil {
