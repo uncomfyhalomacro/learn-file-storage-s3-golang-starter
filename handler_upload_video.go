@@ -3,11 +3,13 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -16,6 +18,68 @@ import (
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
+
+type FFProbeVideoInfo struct {
+	Programs     []interface{} `json:"programs"`
+	StreamGroups []interface{} `json:"stream_groups"`
+	Streams      []struct {
+		Width              int    `json:"width,omitempty"`
+		Height             int    `json:"height,omitempty"`
+		DisplayAspectRatio string `json:"display_aspect_ratio,omitempty"`
+		Disposition        struct {
+			Default         int `json:"default"`
+			Dub             int `json:"dub"`
+			Original        int `json:"original"`
+			Comment         int `json:"comment"`
+			Lyrics          int `json:"lyrics"`
+			Karaoke         int `json:"karaoke"`
+			Forced          int `json:"forced"`
+			HearingImpaired int `json:"hearing_impaired"`
+			VisualImpaired  int `json:"visual_impaired"`
+			CleanEffects    int `json:"clean_effects"`
+			AttachedPic     int `json:"attached_pic"`
+			TimedThumbnails int `json:"timed_thumbnails"`
+			NonDiegetic     int `json:"non_diegetic"`
+			Captions        int `json:"captions"`
+			Descriptions    int `json:"descriptions"`
+			Metadata        int `json:"metadata"`
+			Dependent       int `json:"dependent"`
+			StillImage      int `json:"still_image"`
+			Multilayer      int `json:"multilayer"`
+		} `json:"disposition"`
+		Tags struct {
+			Language    string `json:"language"`
+			HandlerName string `json:"handler_name"`
+			VendorID    string `json:"vendor_id"`
+			Encoder     string `json:"encoder"`
+			Timecode    string `json:"timecode"`
+		} `json:"tags"`
+	} `json:"streams"`
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	// use ffprobe to get the video aspect ratio
+	exec.Command("ffprobe").Run() // ensure ffprobe is installed
+	// ffprobe -v error -show_streams samples/boots-video-horizontal.mp4 -show_entries stream=display_aspect_ratio,width,height -print_format json
+	cmd := exec.Command("ffprobe", "-v", "error", "-show_streams", filePath, "-show_entries", "stream=display_aspect_ratio", "-print_format", "json")
+	output, err := cmd.Output()
+
+	if err != nil {
+		return "", err
+	}
+
+	var info FFProbeVideoInfo
+	err = json.Unmarshal(output, &info)
+	if err != nil {
+		return "", err
+	}
+
+	if len(info.Streams) == 0 {
+		return "", fmt.Errorf("no streams found")
+	}
+
+	return info.Streams[0].DisplayAspectRatio, nil
+}
 
 func getVideoExtension(s string) (string, error) {
 	mediaType, _, err := mime.ParseMediaType(s)
@@ -108,6 +172,24 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	aspectRatio, err := getVideoAspectRatio(videoFile.Name())
+
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error determining aspect ratio", err)
+		return
+	}
+
+	mappingOfAspectRatios := map[string]string{
+		"16:9":  "landscape",
+		"9:16":  "portrait",
+		"other": "other",
+	}
+
+	namedAspectRatio, ok := mappingOfAspectRatios[aspectRatio]
+
+	if !ok {
+		namedAspectRatio = "other"
+	}
 	_, err = videoFile.Seek(0, 0)
 	if err != nil {
 		respondWithError(w, http.StatusInternalServerError, "Server error", err)
@@ -127,7 +209,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	// Encode the random bytes into a hexadecimal string
 	hexString := hex.EncodeToString(randomBytes)
 
-	keyFilename := fmt.Sprintf("%s.%s", hexString, extension)
+	keyFilename := fmt.Sprintf("%s/%s.%s", namedAspectRatio, hexString, extension)
 
 	// upload to S3
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
