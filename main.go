@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
+	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -26,6 +29,42 @@ type apiConfig struct {
 	s3Region         string
 	s3CfDistribution string
 	port             string
+}
+
+func (cfg *apiConfig) dbVideoToSignedVideo(video database.Video) (database.Video, error) {
+	if video.VideoURL == nil || *video.VideoURL == "" {
+		// We don't have a video URL, nothing to sign so just return the video as is even if empty
+		return database.Video{}, nil
+	}
+
+	// VideoURL is stored in the database as bucket,key
+	// We need to split it and generate a signed URL for the key in the bucket
+	// Then we replace the VideoURL with the signed URL
+	// This way we don't store signed URLs in the database which will expire
+	// and we don't expose the S3 bucket publicly
+	// Instead we generate a short-lived signed URL on demand
+
+	// Split on first comma only, in case the key contains commas
+	// which is valid in S3 keys
+	bucketAndKey := strings.Split(*video.VideoURL, ",")
+	if len(bucketAndKey) < 2 {
+		return database.Video{}, fmt.Errorf("video URL %q is not in expected bucket,key format", *video.VideoURL)
+	}
+
+	bucket := bucketAndKey[0]
+	key := bucketAndKey[1]
+
+	if !strings.Contains(bucket, cfg.s3Bucket) {
+		return database.Video{}, fmt.Errorf("video URL bucket %q does not match configured S3 bucket %q", bucket, cfg.s3Bucket)
+	}
+
+	signedURL, err := generatePresignedURL(cfg.s3Client, cfg.s3Bucket, key, 15*60*time.Second)
+	if err != nil {
+		return database.Video{}, err
+	}
+
+	*video.VideoURL = signedURL
+	return video, nil
 }
 
 type thumbnail struct {

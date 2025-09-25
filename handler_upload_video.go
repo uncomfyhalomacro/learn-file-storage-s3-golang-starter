@@ -1,11 +1,13 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"os"
@@ -67,6 +69,19 @@ func processVideoForFastStart(filePath string) (string, error) {
 		return "", err
 	}
 	return outputFilePath, nil
+}
+
+func generatePresignedURL(s3Client *s3.Client, bucket, key string, expireTime time.Duration) (string, error) {
+	presignClient := s3.NewPresignClient(s3Client)
+	params := &s3.GetObjectInput{
+		Bucket: &bucket,
+		Key:    &key,
+	}
+	presignedReq, err := presignClient.PresignGetObject(context.Background(), params, s3.WithPresignExpires(expireTime))
+	if err != nil {
+		return "", err
+	}
+	return presignedReq.URL, nil
 }
 
 func getVideoAspectRatio(filePath string) (string, error) {
@@ -244,7 +259,7 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	// upload to S3
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      &cfg.s3Bucket,
-		Key:         aws.String(keyFilename),
+		Key:         aws.String(fmt.Sprintf("%s,%s", cfg.s3Bucket, keyFilename)),
 		Body:        fastStartedVideoFile,
 		ContentType: &contentType,
 	})
@@ -256,17 +271,27 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 
 	scheme := "https"
 
-	videoUrl := fmt.Sprintf("%s://%s.s3.%s.amazonaws.com/%s", scheme, cfg.s3Bucket, cfg.s3Region, keyFilename)
+	videoUrl := fmt.Sprintf("%s://%s.s3.%s.amazonaws.com/%s,%s", scheme, cfg.s3Bucket, cfg.s3Region, cfg.s3Bucket, keyFilename)
 	video.UpdatedAt = time.Now()
 	video.VideoURL = &videoUrl
 
 	err = cfg.db.UpdateVideo(video)
 
 	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Error updating data", err)
+		respondWithError(w, http.StatusInternalServerError, "Error updating video", err)
 		return
-
 	}
 
-	respondWithJSON(w, http.StatusOK, video)
+	// generate a signed URL for the video
+	signedVideo, err := cfg.dbVideoToSignedVideo(video)
+
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Error generating signed video", err)
+		return
+	}
+
+	log.Printf("Video URl: %s\n", *video.VideoURL)
+	log.Printf("Signed Video URl: %s\n", *signedVideo.VideoURL)
+
+	respondWithJSON(w, http.StatusOK, signedVideo)
 }
